@@ -1,4 +1,7 @@
 ^stanmd\.Rproj$
 ^\.Rproj\.user$
 ^Read-and-delete-me$
-^init.R$
+^init\.R$
+^README\.Rmd$
+^\.travis\.yml$
+^\.github$

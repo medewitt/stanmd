@@ -1,0 +1,113 @@
+---
+title: "State Space Modeling"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{State Space Modeling}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+```{r setup}
+library(tidyverse)
+library(rstan)
+library(stanmd)
+```
+
+This is just a test. I am plagarizing myself from [here](https://michaeldewittjr.com/dewitt_blog/posts/2019-10-08-how-about-impeachment/)
+
+## Our Data
+
+Raw data
+
+```{r}
+dat <- read_csv("https://gist.githubusercontent.com/medewitt/74ad210ea8cd3e5870e44a8b3b2e7d64/raw/116273bc73830331bd6b8c1fdd9e48d5ccb8cc8d/impeachment.csv") %>% 
+  select(-X6)
+
+```
+
+
+A little formatting
+
+```{r}
+library(lubridate)
+dat_range <- crossing(seq(min(dat$date),
+                 max(mdy("11/1/2019")),
+                     "1 day") %>% 
+  enframe(name = NULL) %>% 
+  set_names("date_range"), pollster = unique(dat$pollster))
+
+formatted_data <- dat %>% 
+  mutate(my_end = date) %>% 
+  select(my_end, approve, n, pollster) %>% 
+  mutate(polling_var = sqrt(.5 * (1-.5)/n)*100) %>% 
+  right_join(dat_range, by = c("my_end" = "date_range", "pollster")) 
+
+formatted_data[is.na(formatted_data)] <- -9
+
+sigma <- formatted_data %>% 
+  select(my_end, pollster, polling_var) %>%
+  pivot_wider(names_from = pollster, 
+              values_from = polling_var,
+              values_fn = list(polling_var = max)) %>% 
+  select(-my_end) %>% 
+  as.matrix()
+
+y <- formatted_data %>% 
+  select(my_end, pollster, approve) %>%
+  pivot_wider(names_from = pollster, 
+              values_from = approve,
+              values_fn = list(yes = max)) %>% 
+  select(-my_end) %>% 
+  as.matrix()
+```
+
+## Running the Model
+
+```{r}
+fit <- stan_poll_pred(y = y, sigma = sigma, iter = 500, chains = 2)
+```
+
+Obviously this is a terrible fit. I just wanted something to run for testing purposes.
+
+## Extract the Fit
+
+```{r}
+mu_trump <- extract(fit, pars = "mu", permuted = T)[[1]] %>% 
+  as.data.frame
+
+names(mu_trump) <- unique(dat_range$date_range)
+
+mu_ts_trump <- mu_trump %>% reshape2::melt() %>% 
+  mutate(date = as.Date(variable)) %>% 
+  group_by(date) %>% 
+  summarise(median = median(value),
+            lower = quantile(value, 0.025),
+            upper = quantile(value, 0.975),
+            candidate = "Trump")
+```
+
+And now we can plot!
+
+```{r}
+mu_ts_trump %>% 
+  ggplot(aes(date, median))+
+  geom_line(color = "#E91D0E")+
+  geom_ribbon(aes(ymin = lower, ymax = upper), alpha = .2)+
+  labs(
+    title = "Support for Impeachment of President Trump",
+    subtitle = "Based on State-Space Modeling\nInitial Prior: 40%",
+    caption = "Data: https://github.com/fivethirtyeight/data/tree/master/polls",
+    y = "Approval",
+    x = NULL
+  )+
+  geom_vline(xintercept = as.Date(Sys.Date()), color = "orange")+
+  geom_point(data = dat, (aes(date, approve)))
+```
+
